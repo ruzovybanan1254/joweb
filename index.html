@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Statistika: Kolikrát zaznělo "JO"</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f8f9fa;
+            color: #343a40;
+        }
+        .controls {
+            margin-bottom: 20px;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        select {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #ced4da;
+            font-size: 16px;
+            outline: none;
+            cursor: pointer;
+        }
+        .chart-container {
+            width: 100%;
+            max-width: 800px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-weight: bold;
+            color: #6c757d;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Frekvence slova "JO"</h1>
+    
+    <div class="controls">
+        <label for="periodSelect"><strong>Vyberte období:</strong></label>
+        <select id="periodSelect">
+            <option value="last-week">Poslední týden</option>
+            </select>
+    </div>
+    
+    <div class="chart-container">
+        <div id="loading">Načítám data...</div>
+        <canvas id="joChart"></canvas>
+    </div>
+
+    <script>
+        let joChart = null;
+        const selectElement = document.getElementById('periodSelect');
+        const loadingElement = document.getElementById('loading');
+
+        // Názvy měsíců v češtině
+        const monthNames = ["Leden", "Únor", "Březen", "Duben", "Květen", "Červen", "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"];
+
+        // Pomocná funkce pro formátování YYYY-MM
+        function formatYearMonth(date) {
+            const yyyy = date.getFullYear();
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            return `${yyyy}-${mm}`;
+        }
+
+        // Pomocná funkce pro formátování YYYY-MM-DD
+        function formatDate(date) {
+            const yyyy = date.getFullYear();
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            const dd = String(date.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        }
+
+        // Inicializace rozevíracího seznamu (přidá aktuální a 3 předchozí měsíce)
+        function initSelectOptions() {
+            const today = new Date();
+            for (let i = 0; i <= 3; i++) {
+                const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                const value = formatYearMonth(d);
+                const label = `${monthNames[d.getMonth()]} ${d.getFullYear()}${i === 0 ? ' (Tento měsíc)' : ''}`;
+                
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                selectElement.appendChild(option);
+            }
+        }
+
+        // Funkce pro stažení dat pro konkrétní měsíc (YYYY-MM)
+        async function fetchMonthData(monthStr) {
+            try {
+                const response = await fetch(`https://jo.gregstr.eu/api.php?month=${monthStr}`);
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+                return data.success && data.days ? data.days : {};
+            } catch (error) {
+                console.error('Chyba při stahování dat:', error);
+                return {};
+            }
+        }
+
+        // Hlavní funkce pro načtení a zpracování dat
+        async function loadAndRenderData() {
+            const period = selectElement.value;
+            loadingElement.style.display = 'block'; // Zobrazí text načítání
+            
+            let finalDaysData = {};
+
+            if (period === 'last-week') {
+                const today = new Date();
+                const lastWeek = new Date();
+                lastWeek.setDate(today.getDate() - 7);
+
+                const currentMonthStr = formatYearMonth(today);
+                const lastWeekMonthStr = formatYearMonth(lastWeek);
+
+                // Stažení dat pro aktuální měsíc
+                let data = await fetchMonthData(currentMonthStr);
+                
+                // Pokud poslední týden zasahuje do předchozího měsíce, stáhneme i ten
+                if (currentMonthStr !== lastWeekMonthStr) {
+                    const prevData = await fetchMonthData(lastWeekMonthStr);
+                    data = { ...prevData, ...data };
+                }
+
+                const todayStr = formatDate(today);
+                const lastWeekStr = formatDate(lastWeek);
+
+                // Filtrace pouze na posledních 7 dní
+                for (const [date, info] of Object.entries(data)) {
+                    if (date >= lastWeekStr && date <= todayStr) {
+                        finalDaysData[date] = info;
+                    }
+                }
+            } else {
+                // Stažení celého měsíce podle výběru
+                finalDaysData = await fetchMonthData(period);
+            }
+
+            loadingElement.style.display = 'none'; // Skryje text načítání
+            renderChart(finalDaysData);
+        }
+
+        // Funkce pro vykreslení/aktualizaci grafu
+        function renderChart(daysData) {
+            // Seřazení klíčů (datumů) chronologicky
+            const labels = Object.keys(daysData).sort();
+            const dataValues = labels.map(date => daysData[date].count);
+
+            const ctx = document.getElementById('joChart').getContext('2d');
+
+            if (joChart) {
+                // Pokud graf už existuje, jen updatujeme data
+                joChart.data.labels = labels;
+                joChart.data.datasets[0].data = dataValues;
+                joChart.update();
+            } else {
+                // Vytvoření nového grafu
+                joChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Počet řečených "JO"',
+                            data: dataValues,
+                            backgroundColor: 'rgba(54, 162, 235, 0.6)', // Změněno na modrou pro profesionálnější vzhled
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 2,
+                            borderRadius: 5
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'Počet' }
+                            },
+                            x: {
+                                title: { display: true, text: 'Datum přednášky' }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+            }
+        }
+
+        // Spuštění po načtení stránky
+        initSelectOptions();
+        loadAndRenderData();
+
+        // Posluchač změny v rozevíracím seznamu
+        selectElement.addEventListener('change', loadAndRenderData);
+
+    </script>
+</body>
+</html>
